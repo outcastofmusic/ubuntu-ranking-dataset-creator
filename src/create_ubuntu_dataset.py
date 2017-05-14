@@ -1,15 +1,13 @@
 import argparse
-import os
-import unicodecsv
-import random
-from six.moves import urllib
-import tarfile
 import csv
+import os
+import random
+import tarfile
 
-import nltk
-from nltk.stem import SnowballStemmer, WordNetLemmatizer
-
-__author__ = 'rkadlec'
+import spacy
+import tqdm
+from six.moves import urllib
+from spacy.symbols import ORTH, LEMMA, POS
 
 """
 Script for generation of train, test and valid datasets from Ubuntu Corpus 1 on 1 dialogs.
@@ -23,6 +21,51 @@ end_of_utterance_symbol = "__eou__"
 end_of_turn_symbol = "__eot__"
 
 
+def arbitrary_fixup_rules(doc):
+    for token in doc:
+        if token.like_url:
+            token.lemma_ = '__url__'
+        elif token.like_email:
+            token.lemma_ = '__email__'
+
+
+def custom_pipeline(nlp):
+    return nlp.tagger, arbitrary_fixup_rules
+
+
+nlp = spacy.load('en_depent_web_md', create_pipeline=custom_pipeline)
+
+nlp.tokenizer.add_special_case(dialog_end_symbol,
+                               [
+                                   {
+                                       ORTH: dialog_end_symbol,
+                                       LEMMA: dialog_end_symbol,
+                                       POS: dialog_end_symbol}])
+
+nlp.tokenizer.add_special_case(end_of_utterance_symbol,
+                               [
+                                   {
+                                       ORTH: end_of_utterance_symbol,
+                                       LEMMA: end_of_utterance_symbol,
+                                       POS: end_of_utterance_symbol}])
+
+nlp.tokenizer.add_special_case(end_of_turn_symbol,
+                               [
+                                   {
+                                       ORTH: end_of_turn_symbol,
+                                       LEMMA: end_of_turn_symbol,
+                                       POS: end_of_turn_symbol}])
+
+
+def process_sentence(sentence, lemmatize=True):
+    if isinstance(sentence, (float, int)):
+        return sentence
+    doc = nlp(sentence)
+    if lemmatize:
+        return " ".join([word.lemma_ for word in doc])
+    else:
+        return " ".join([word.text for word in doc])
+
 
 def translate_dialog_to_lists(dialog_filename):
     """
@@ -33,14 +76,14 @@ def translate_dialog_to_lists(dialog_filename):
     :return:
     """
 
-    dialog_file = open(dialog_filename, 'r')
-    dialog_reader = unicodecsv.reader(dialog_file, delimiter='\t',quoting=csv.QUOTE_NONE)
+    dialog_file = open(dialog_filename, 'rt', encoding='utf-8')
+    dialog_reader = csv.reader(dialog_file, delimiter='\t', quoting=csv.QUOTE_NONE)
 
     # go through the dialog
     first_turn = True
     dialog = []
     same_user_utterances = []
-    #last_user = None
+    # last_user = None
     dialog.append(same_user_utterances)
 
     for dialog_line in dialog_reader:
@@ -63,7 +106,7 @@ def translate_dialog_to_lists(dialog_filename):
     return dialog
 
 
-def get_random_utterances_from_corpus(candidate_dialog_paths,rng,utterances_num=9,min_turn=3,max_turn=20):
+def get_random_utterances_from_corpus(candidate_dialog_paths, rng, utterances_num=9, min_turn=3, max_turn=20):
     """
     Sample multiple random utterances from the whole corpus.
     :param candidate_dialog_paths:
@@ -75,29 +118,30 @@ def get_random_utterances_from_corpus(candidate_dialog_paths,rng,utterances_num=
     utterances = []
     dialogs_num = len(candidate_dialog_paths)
 
-    for i in xrange(0,utterances_num):
+    for i in range(utterances_num):
         # sample random dialog
-        dialog_path = candidate_dialog_paths[rng.randint(0,dialogs_num-1)]
+        dialog_path = candidate_dialog_paths[rng.randint(0, dialogs_num - 1)]
         # load the dialog
         dialog = translate_dialog_to_lists(dialog_path)
 
         # we do not count the last  _dialog_end__ urn
         dialog_len = len(dialog) - 1
-        if(dialog_len<min_turn):
-            print "Dialog {} was shorter than the minimum required lenght {}".format(dialog_path,dialog_len)
+        if dialog_len < min_turn:
+            print("Dialog {} was shorter than the minimum required lenght {}".format(dialog_path, dialog_len))
             exit()
         # sample utterance, exclude the last round that is always "dialog end"
         max_ix = min(max_turn, dialog_len) - 1
 
         # this code deals with corner cases when dialogs are too short
-        if min_turn -1 == max_ix:
+        if min_turn - 1 == max_ix:
             turn_index = max_ix
         else:
-            turn_index = rng.randint(min_turn,max_ix)
+            turn_index = rng.randint(min_turn, max_ix)
 
         utterance = singe_user_utterances_to_string(dialog[turn_index])
         utterances.append(utterance)
     return utterances
+
 
 def singe_user_utterances_to_string(utterances_list):
     """
@@ -105,7 +149,8 @@ def singe_user_utterances_to_string(utterances_list):
     :param utterances_list:
     :return:
     """
-    return " ".join(map(lambda x: x+" "+ end_of_utterance_symbol, utterances_list))
+    return " ".join([x + " " + end_of_utterance_symbol + " " for x in utterances_list])
+
 
 def dialog_turns_to_string(dialog):
     """
@@ -113,12 +158,16 @@ def dialog_turns_to_string(dialog):
     :param dialog:
     :return:
     """
-    # join utterances
-    turns_as_strings = map(singe_user_utterances_to_string,dialog)
-    # join turns
-    return "".join(map(lambda x : x + " " + end_of_turn_symbol + " ", turns_as_strings))
 
-def create_random_context(dialog,rng,minimum_context_length=2,max_context_length=20):
+    # join utterances
+    def turns_as_strings(dialog):
+        for x in dialog:
+            yield singe_user_utterances_to_string(x)
+
+    return " ".join([x + " " + end_of_turn_symbol for x in turns_as_strings(dialog)])
+
+
+def create_random_context(dialog, rng, minimum_context_length=2, max_context_length=20):
     """
     Samples random context from a dialog. Contexts are uniformly sampled from the whole dialog.
     :param dialog:
@@ -126,20 +175,19 @@ def create_random_context(dialog,rng,minimum_context_length=2,max_context_length
     :return: context, index of next utterance that follows the context
     """
     # sample dialog context
-    #context_turns = rng.randint(minimum_context_length,len(dialog)-1)
+    # context_turns = rng.randint(minimum_context_length,len(dialog)-1)
     max_len = min(max_context_length, len(dialog)) - 2
     if max_len <= minimum_context_length:
         context_turns = max_len
     else:
-        context_turns = rng.randint(minimum_context_length,max_len)
+        context_turns = rng.randint(minimum_context_length, max_len)
 
     # create string
-    return dialog_turns_to_string(dialog[:context_turns]),context_turns
-
+    return dialog_turns_to_string(dialog[:context_turns]), context_turns
 
 
 def create_single_dialog_train_example(context_dialog_path, candidate_dialog_paths, rng, positive_probability,
-                                       minimum_context_length=2,max_context_length=20):
+                                       minimum_context_length=2, max_context_length=20):
     """
     Creates a single example for training set.
     :param context_dialog_path:
@@ -160,14 +208,15 @@ def create_single_dialog_train_example(context_dialog_path, candidate_dialog_pat
         response = singe_user_utterances_to_string(dialog[next_utterance_ix])
         label = 1.0
     else:
-        response = get_random_utterances_from_corpus(candidate_dialog_paths,rng,1,
-                                                     min_turn=minimum_context_length+1,
+        response = get_random_utterances_from_corpus(candidate_dialog_paths, rng, 1,
+                                                     min_turn=minimum_context_length + 1,
                                                      max_turn=max_context_length)[0]
         label = 0.0
     return context_str, response, label
 
 
-def create_single_dialog_test_example(context_dialog_path, candidate_dialog_paths, rng, distractors_num, max_context_length):
+def create_single_dialog_test_example(context_dialog_path, candidate_dialog_paths, rng, distractors_num,
+                                      max_context_length):
     """
     Creates a single example for testing or validation. Each line contains a context, one positive example and N negative examples.
     :param context_dialog_path:
@@ -184,7 +233,7 @@ def create_single_dialog_test_example(context_dialog_path, candidate_dialog_path
     # use the next utterance as positive example
     positive_response = singe_user_utterances_to_string(dialog[next_utterance_ix])
 
-    negative_responses = get_random_utterances_from_corpus(candidate_dialog_paths,rng,distractors_num)
+    negative_responses = get_random_utterances_from_corpus(candidate_dialog_paths, rng, distractors_num)
     return context_str, positive_response, negative_responses
 
 
@@ -196,16 +245,15 @@ def create_examples_train(candidate_dialog_paths, rng, positive_probability=0.5,
     :param positive_probability: probability of selecting positive training example
     :return:
     """
-    i = 0
     examples = []
-    for context_dialog in candidate_dialog_paths:
+    for i, context_dialog in enumerate(candidate_dialog_paths):
         if i % 1000 == 0:
-            print str(i)
+            print(str(i))
         dialog_path = candidate_dialog_paths[i]
-        examples.append(create_single_dialog_train_example(dialog_path, candidate_dialog_paths, rng, positive_probability,
-                                                           max_context_length=max_context_length))
-        i+=1
-    #return map(lambda dialog_path : create_single_dialog_train_example(dialog_path, candidate_dialog_paths, rng, positive_probability), candidate_dialog_paths)
+        examples.append(
+            create_single_dialog_train_example(dialog_path, candidate_dialog_paths, rng, positive_probability,
+                                               max_context_length=max_context_length))
+
 
 def create_examples(candidate_dialog_paths, examples_num, creator_function):
     """
@@ -214,60 +262,59 @@ def create_examples(candidate_dialog_paths, examples_num, creator_function):
     :param creator_function:
     :return:
     """
-    i = 0
     examples = []
     unique_dialogs_num = len(candidate_dialog_paths)
 
-    while i < examples_num:
-        context_dialog = candidate_dialog_paths[i % unique_dialogs_num]
-        # counter for tracking progress
-        if i % 1000 == 0:
-            print str(i)
-        i+=1
-
+    for index in tqdm.tqdm(range(examples_num), desc='processing examples'):
+        context_dialog = candidate_dialog_paths[index % unique_dialogs_num]
         examples.append(creator_function(context_dialog, candidate_dialog_paths))
 
     return examples
 
-def convert_csv_with_dialog_paths(csv_file):
+
+def convert_csv_with_dialog_paths(root_path, csv_file):
     """
     Converts CSV file with comma separated paths to filesystem paths.
     :param csv_file:
     :return:
     """
-    def convert_line_to_path(line):
-        file, dir = map(lambda x : x.strip(), line.split(","))
-        return os.path.join(dir, file)
 
-    return map(convert_line_to_path, csv_file)
+    for row in csv.reader(csv_file):
+        yield os.path.join(root_path, row[1], row[0])
+        # def convert_line_to_path(line):
+        #     file, dir = map(lambda x: x.strip(), line.split(","))
+        #     return os.path.join(dir, file)
+        #
+        # return map(convert_line_to_path, csv_file)
 
 
 def prepare_data_maybe_download(directory):
-  """
-  Download and unpack dialogs if necessary.
-  """
-  filename = 'ubuntu_dialogs.tgz'
-  url = 'http://cs.mcgill.ca/~jpineau/datasets/ubuntu-corpus-1.0/ubuntu_dialogs.tgz'
-  dialogs_path = os.path.join(directory, 'dialogs')
+    """
+    Download and unpack dialogs if necessary.
+    """
+    filename = 'ubuntu_dialogs.tgz'
+    url = 'http://cs.mcgill.ca/~jpineau/datasets/ubuntu-corpus-1.0/ubuntu_dialogs.tgz'
+    dialogs_path = os.path.join(directory, 'dialogs')
 
-  # test it there are some dialogs in the path
-  if not os.path.exists(os.path.join(directory,"10","1.tst")):
-    # dialogs are missing
-    archive_path = os.path.join(directory,filename)
-    if not os.path.exists(archive_path):
-        # archive missing, download it
-        print("Downloading %s to %s" % (url, archive_path))
-        filepath, _ = urllib.request.urlretrieve(url, archive_path)
-        print "Successfully downloaded " + filepath
+    # test it there are some dialogs in the path
+    if not os.path.exists(os.path.join(directory, "10", "1.tst")):
+        # dialogs are missing
+        archive_path = os.path.join(directory, filename)
+        if not os.path.exists(archive_path):
+            # archive missing, download it
+            print("Downloading %s to %s" % (url, archive_path))
+            filepath, _ = urllib.request.urlretrieve(url, archive_path)
+            print("Successfully downloaded " + filepath)
 
-    # unpack data
-    if not os.path.exists(dialogs_path):
-          print("Unpacking dialogs ...")
-          with tarfile.open(archive_path) as tar:
+        # unpack data
+        if not os.path.exists(dialogs_path):
+            print("Unpacking dialogs ...")
+            with tarfile.open(archive_path) as tar:
                 tar.extractall(path=directory)
-          print("Archive unpacked.")
+            print("Archive unpacked.")
 
-    return
+        return
+
 
 #####################################################################################
 # Command line script related code
@@ -275,41 +322,31 @@ def prepare_data_maybe_download(directory):
 
 if __name__ == '__main__':
 
-
     def create_eval_dataset(args, file_list_csv):
         rng = random.Random(args.seed)
         # training dataset
-        f = open(os.path.join("meta", file_list_csv), 'r')
-        dialog_paths = map(lambda path: os.path.join(args.data_root, "dialogs", path), convert_csv_with_dialog_paths(f))
+        with open(os.path.join("meta", file_list_csv), 'rt') as file_handle:
+            dialog_paths = [d for d in
+                            convert_csv_with_dialog_paths(os.path.join(args.data_root, "dialogs"), file_handle)]
 
         data_set = create_examples(dialog_paths,
                                    len(dialog_paths),
-                                   lambda context_dialog, candidates : create_single_dialog_test_example(context_dialog, candidates, rng,
-                                                                     args.n, args.max_context_length))
+                                   lambda context_dialog, candidates: create_single_dialog_test_example(context_dialog,
+                                                                                                        candidates, rng,
+                                                                                                        args.n,
+                                                                                                        args.max_context_length))
         # output the dataset
-        w = unicodecsv.writer(open(args.output, 'w'), encoding='utf-8')
-        # header
-        header = ["Context", "Ground Truth Utterance"]
-        header.extend(map(lambda x: "Distractor_{}".format(x), xrange(args.n)))
-        w.writerow(header)
-
-        stemmer = SnowballStemmer("english")
-        lemmatizer = WordNetLemmatizer()
-
-        for row in data_set:
-            translated_row = [row[0], row[1]]
-            translated_row.extend(row[2])
-            
-            if args.tokenize:
-                translated_row = map(nltk.word_tokenize, translated_row)
-                if args.stem:
-                    translated_row = map(lambda sub: map(stemmer.stem, sub), translated_row)
-                if args.lemmatize:
-                    translated_row = map(lambda sub: map(lambda tok: lemmatizer.lemmatize(tok, pos='v'), sub), translated_row)
-                    
-                translated_row = map(lambda x: " ".join(x), translated_row)
-
-            w.writerow(translated_row)
+        with open(args.output, 'wt', encoding='utf-8') as file_handle:
+            w = csv.writer(file_handle)
+            # header
+            header = ["Context", "Ground Truth Utterance"]
+            header.extend(map(lambda x: "Distractor_{}".format(x), range(args.n)))
+            w.writerow(header)
+            for row in tqdm.tqdm(data_set, desc='tokenizing/lemmatizing dataset'):
+                translated_row = [row[0], row[1], *row[2]]
+                if args.tokenize:
+                    translated_row = [process_sentence(sent, args.lemmatize) for sent in translated_row]
+                w.writerow(translated_row)
         print("Dataset stored in: {}".format(args.output))
 
 
@@ -317,42 +354,34 @@ if __name__ == '__main__':
 
         rng = random.Random(args.seed)
         # training dataset
-
-        f = open(os.path.join("meta", "trainfiles.csv"), 'r')
-        dialog_paths = map(lambda path: os.path.join(args.data_root, "dialogs", path), convert_csv_with_dialog_paths(f))
-
+        with open(os.path.join("meta", "trainfiles.csv"), 'rt') as file_handle:
+            dialog_paths = [d for d in
+                            convert_csv_with_dialog_paths(os.path.join(args.data_root, "dialogs"), file_handle)]
         train_set = create_examples(dialog_paths,
                                     args.examples,
-                                    lambda context_dialog, candidates :
+                                    lambda context_dialog, candidates:
                                     create_single_dialog_train_example(context_dialog, candidates, rng,
-                                                                       args.p, max_context_length=args.max_context_length))
-
-        stemmer = SnowballStemmer("english")
-        lemmatizer = WordNetLemmatizer()
+                                                                       args.p,
+                                                                       max_context_length=args.max_context_length))
 
         # output the dataset
-        w = unicodecsv.writer(open(args.output, 'w'), encoding='utf-8')
-        # header
-        w.writerow(["Context", "Utterance", "Label"])
-        for row in train_set:
-            translated_row = row
+        with open(args.output, 'wt', encoding='utf-8') as file_handle:
+            w = csv.writer(file_handle)
+            # header
+            w.writerow(["Context", "Utterance", "Label"])
+            for row in tqdm.tqdm(train_set, desc='tokkenizing/lemmatizing set'):
+                translated_row = row
 
-            if args.tokenize:
-                translated_row = [nltk.word_tokenize(row[i]) for i in [0,1]]
+                if args.tokenize:
+                    translated_row = [process_sentence(sent, args.lemmatize) for sent in translated_row]
 
-                if args.stem:
-                    translated_row = map(lambda sub: map(stemmer.stem, sub), translated_row)
-                if args.lemmatize:
-                    translated_row = map(lambda sub: map(lambda tok: lemmatizer.lemmatize(tok, pos='v'), sub), translated_row)
-
-                translated_row = map(lambda x: " ".join(x), translated_row)
-                translated_row.append(int(float(row[2])))
-
-            w.writerow(translated_row)
+                w.writerow(translated_row)
         print("Train dataset stored in: {}".format(args.output))
+
 
     def valid_cmd(args):
         create_eval_dataset(args, "valfiles.csv")
+
 
     def test_cmd(args):
         create_eval_dataset(args, "testfiles.csv")
@@ -378,10 +407,7 @@ if __name__ == '__main__':
                         help='tokenize the output')
 
     parser.add_argument('-l', '--lemmatize', action='store_true',
-                        help='lemmatize the output by nltk.stem.WorldNetLemmatizer (applied only when -t flag is present)')
-
-    parser.add_argument('-s', '--stem', action='store_true',
-                        help='stem the output by nltk.stem.SnowballStemmer (applied only when -t flag is present)')
+                        help='lemmatize the output by spacy lemmatizer (applied only when -t flag is present)')
 
     subparsers = parser.add_subparsers(help='sub-command help')
 
@@ -405,4 +431,3 @@ if __name__ == '__main__':
 
     # create dataset
     args.func(args)
-

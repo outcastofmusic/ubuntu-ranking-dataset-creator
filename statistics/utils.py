@@ -1,13 +1,13 @@
-import unicodecsv
 import matplotlib.pyplot as plt
 import numpy
+import csv
 from collections import defaultdict
 from scipy.stats import chisquare, ttest_ind
 
 
 def n_utterances_counts(f_name, eou='__eou__'):
     n_utterances = []
-    reader = unicodecsv.reader(open(f_name))
+    reader = csv.reader(open(f_name))
     next(reader)    # skip header
     for line in reader:
         n_utterances.append(line[0].count(eou))
@@ -22,7 +22,7 @@ def train_stats(f_name, eou='__eou__', eot='__eot__'):
     neg_turns = []
     neg_words = []
 
-    reader = unicodecsv.reader(open(f_name))
+    reader = csv.reader(open(f_name))
     next(reader)    # skip header
     for line in reader:
         if int(float(line[2])) == 1:
@@ -34,7 +34,7 @@ def train_stats(f_name, eou='__eou__', eot='__eot__'):
             neg_turns.append(line[0].count(eot))
             neg_words.append(len(line[0].split()))
         else:
-            print line[2]
+            print(line[2])
 
     return pos_utterances, pos_turns, pos_words, neg_utterances, neg_turns, neg_words
 
