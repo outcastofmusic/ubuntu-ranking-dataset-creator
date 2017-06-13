@@ -27,6 +27,8 @@ def arbitrary_fixup_rules(doc):
             token.lemma_ = '__url__'
         elif token.like_email:
             token.lemma_ = '__email__'
+        elif token.is_digit or token.like_digit:
+            token.lemma_ = '__digit__'
 
 
 def custom_pipeline(nlp):
@@ -281,11 +283,6 @@ def convert_csv_with_dialog_paths(root_path, csv_file):
 
     for row in csv.reader(csv_file):
         yield os.path.join(root_path, row[1], row[0])
-        # def convert_line_to_path(line):
-        #     file, dir = map(lambda x: x.strip(), line.split(","))
-        #     return os.path.join(dir, file)
-        #
-        # return map(convert_line_to_path, csv_file)
 
 
 def prepare_data_maybe_download(directory):
